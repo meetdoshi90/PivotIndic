@@ -1,21 +1,24 @@
 BASE="$PWD"
-export CUDA_VISIBLE_DEVICES='3'
-OUT_DIR_NAME=$1
+export CUDA_VISIBLE_DEVICES='4'
 
-OUT_DIR="$BASE/model/${OUT_DIR_NAME}"
+OUT_DIR="$BASE/model/"
 mkdir -p $OUT_DIR
 
-SRC_1_FILE="${BASE}/../dummy_data/test.eng_Latn"
-SRC_2_FILE="${BASE}/../dummy_data/test.hin_Deva"
-TGT_FILE="${BASE}/../dummy_data/test.brx_Deva"
+SRC_1_FILE="${BASE}/../dummy_data/test.$1"
+SRC_2_FILE="${BASE}/../dummy_data/test.$2"
+TGT_FILE="${BASE}/../dummy_data/test.$3"
+
+TEST_SRC_1_FILE="${BASE}/../../data/IN22/IN22-Gen/test.$1"
+TEST_SRC_2_FILE="${BASE}/../../data/IN22/IN22-Gen/test.$2"
+TEST_TGT_FILE="${BASE}/../../data/IN22/IN22-Gen/test.$3"
 
 BATCH_SIZE=16
 GRAD_STEPS=2
-LEARNING_RATE=3e-6
-WARMUP=1000
-SAVE_STEPS=5000
-EVAL_STEPS=5000
-NUM_EPOCHS=1
+LEARNING_RATE=3e-4
+WARMUP=10
+SAVE_STEPS=3000
+EVAL_STEPS=1
+NUM_EPOCHS=10
 
 if [ ! -d $OUT_DIR ] 
 then
@@ -35,7 +38,7 @@ python $BASE/ft_ensemble_2e2d.py \
     --warmup_steps $WARMUP \
     --learning_rate $LEARNING_RATE \
     --lr_scheduler_type 'constant_with_warmup' \
-    --weight_decay 0.0001 \
+    --weight_decay 0.01 \
     --per_device_train_batch_size $BATCH_SIZE \
     --per_device_eval_batch_size $BATCH_SIZE \
     --remove_unused_columns False \
@@ -48,10 +51,18 @@ python $BASE/ft_ensemble_2e2d.py \
     --src_1_path $SRC_1_FILE \
     --src_2_path $SRC_2_FILE \
     --tgt_path $TGT_FILE \
+    --test_src_1_path $TEST_SRC_1_FILE \
+    --test_src_2_path $TEST_SRC_2_FILE \
+    --test_tgt_path $TEST_TGT_FILE \
     --save_total_limit 3 \
     --load_best_model_at_end \
     --gradient_accumulation_steps $GRAD_STEPS \
     --report_to wandb \
-    --max_grad_norm 5.0 \
+    --predict_with_generate True \
+    --generation_max_length 512 \
+    --generation_num_beams 5 \
+    --max_grad_norm 1.0 \
+    --alpha $4 \
+    --beta $5 \
     --num_train_epochs $NUM_EPOCHS \
     # --max_steps $MAX_STEPS \
