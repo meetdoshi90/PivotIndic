@@ -4,21 +4,21 @@ export CUDA_VISIBLE_DEVICES='4'
 OUT_DIR="$BASE/model/"
 mkdir -p $OUT_DIR
 
-SRC_1_FILE="${BASE}/../dummy_data/test.$1"
-SRC_2_FILE="${BASE}/../dummy_data/test.$2"
-TGT_FILE="${BASE}/../dummy_data/test.$3"
+SRC_1_FILE="${BASE}/../../data/train/go/syn-target/train.$1"
+SRC_2_FILE="${BASE}/../../data/train/go/syn-target/train.$2"
+TGT_FILE="${BASE}/../../data/train/go/syn-target/train.$3"
 
 TEST_SRC_1_FILE="${BASE}/../../data/IN22/IN22-Gen/test.$1"
 TEST_SRC_2_FILE="${BASE}/../../data/IN22/IN22-Gen/test.$2"
 TEST_TGT_FILE="${BASE}/../../data/IN22/IN22-Gen/test.$3"
 
-BATCH_SIZE=16
-GRAD_STEPS=2
-LEARNING_RATE=3e-4
-WARMUP=10
-SAVE_STEPS=3000
-EVAL_STEPS=1
-NUM_EPOCHS=10
+BATCH_SIZE=12
+GRAD_STEPS=4
+LEARNING_RATE=3e-5
+WARMUP=100
+SAVE_STEPS=1000
+EVAL_STEPS=500
+NUM_EPOCHS=1
 
 if [ ! -d $OUT_DIR ] 
 then
@@ -34,7 +34,7 @@ python $BASE/ft_ensemble_2e2d.py \
     --logging_steps 1 \
     --seed 42 \
     --overwrite_output_dir \
-    --dropout_rate 0.1  \
+    --dropout_rate 0.2  \
     --warmup_steps $WARMUP \
     --learning_rate $LEARNING_RATE \
     --lr_scheduler_type 'constant_with_warmup' \
@@ -47,7 +47,7 @@ python $BASE/ft_ensemble_2e2d.py \
     --evaluation_strategy 'steps'\
     --prediction_loss_only False \
     --do_predict True \
-    --wandb_project 'indictrans2-2e2d-en-hi-brx' \
+    --wandb_project 'indictrans2-2e2d' \
     --src_1_path $SRC_1_FILE \
     --src_2_path $SRC_2_FILE \
     --tgt_path $TGT_FILE \
@@ -60,9 +60,12 @@ python $BASE/ft_ensemble_2e2d.py \
     --report_to wandb \
     --predict_with_generate True \
     --generation_max_length 512 \
-    --generation_num_beams 5 \
+    --generation_num_beams 1 \
     --max_grad_norm 1.0 \
     --alpha $4 \
     --beta $5 \
     --num_train_epochs $NUM_EPOCHS \
+    --save_safetensors True \
+    --metric_for_best_model 'eval_bleu' \
+    --greater_is_better True \
     # --max_steps $MAX_STEPS \

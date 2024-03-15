@@ -614,7 +614,7 @@ if __name__ == "__main__":
         bos_token_id = 0,
         decoder_start_token_id = 2,
         eos_token_id = 2,
-        max_source_positions = 256,
+        max_source_positions = 512,
         max_target_positions = 256,
         use_cache = False,
         pad_token_id = 1,
@@ -641,6 +641,15 @@ if __name__ == "__main__":
 
     test_predictions = []
     test_references = [[x.strip()] for x in IN22_tgt]
+
+    print('Saving torch state dict to',os.path.join(training_args.output_dir,'torch_state_dict'))
+    #torch.save(model.state_dict(),os.path.join(training_args.output_dir,'torch_state_dict'))
+    print("Saved")
+
+    print('Saving torch model to',os.path.join(training_args.output_dir,'torch_model'))
+    #torch.save(model,os.path.join(training_args.output_dir,'torch_model'))
+    print("Saved")
+    
     model.eval()
     for test_inputs_1,test_inputs_2,test_tgt in tqdm(zip(IN22_src_1,IN22_src_2,IN22_tgt)):
         test_inputs_1 = [test_inputs_1]
@@ -702,7 +711,7 @@ if __name__ == "__main__":
     print(test_references)
     assert len(test_predictions)==len(test_references)
     print(metric.compute(predictions=test_predictions,references=test_references))
-    raise Exception('TEST')
+    #raise Exception('TEST')
     model.train()
     wandb.init(
         # set the wandb project where this run will be logged
@@ -721,10 +730,18 @@ if __name__ == "__main__":
     print("Trainer args:--------------- ")
     print(training_args)
 
+    def set_before_second_occurrence_to_1(arr):
+        result = arr
+        for i, row in enumerate(arr):
+            second_occurrence_index = np.where(row == 2)[0]
+            if len(second_occurrence_index) > 1:
+                result[i, :second_occurrence_index[1]+1] = 1
+        return result
+
 
     def compute_metrics(eval_preds):
         print('----------Computing BLEU scores---------')
-        print('\n'*20)
+        print('\n'*5)
         #raise Exception('METRICS WORK')
         #copied from https://github.com/huggingface/transformers/blob/39ef3fb248ba288897f35337f4086054c69332e5/examples/pytorch/translation/run_translation.py#L575
         preds, labels = eval_preds
@@ -732,14 +749,17 @@ if __name__ == "__main__":
             preds = preds[0]
         # Replace -100s used for padding as we can't decode them
         preds = np.where(preds != -100, preds, PAD_ID)
+        preds = set_before_second_occurrence_to_1(preds)
         decoded_preds = en_indic_tokenizer.batch_decode(preds, src=False)
         print(decoded_preds)
         print(tgt_lang)
         #decoded_preds = ip.postprocess_batch(decoded_preds, lang=tgt_lang)
         labels = np.where(labels != -100, labels, PAD_ID)
+        print(preds[0,:])
         decoded_labels = en_indic_tokenizer.batch_decode(labels, src=False)
         print(decoded_preds)
         print(decoded_labels[0])
+        print(decoded_preds[0])
         assert len(decoded_preds)==len(decoded_labels)
         # Some simple post-processing
         # decoded_preds, decoded_labels = postprocess_text(decoded_preds, decoded_labels)
@@ -747,8 +767,8 @@ if __name__ == "__main__":
         result = metric.compute(predictions=decoded_preds, references=decoded_labels)
         result = {"bleu": result["score"]}
         print(result)
-        print('\n'*20)
-        raise Exception('BLEU test')
+        print('\n'*5)
+        #raise Exception('BLEU test')
         prediction_lens = [np.count_nonzero(pred != PAD_ID) for pred in preds] #1==PAD Token
         result["gen_len"] = np.mean(prediction_lens)
         result = {k: round(v, 4) for k, v in result.items()}
@@ -777,4 +797,11 @@ if __name__ == "__main__":
         # save the best model
         trainer.save_model(os.path.join(training_args.output_dir,'final_model'))
 
+    print('Saving torch state dict to',os.path.join(training_args.output_dir,'torch_state_dict'))
+    #torch.save(model.state_dict(),os.path.join(training_args.output_dir,'torch_state_dict'))
+    print("Saved")
+
+    print('Saving torch model to',os.path.join(training_args.output_dir,'torch_model'))
+    #torch.save(model,os.path.join(training_args.output_dir,'torch_model'))
+    print("Saved")
     
