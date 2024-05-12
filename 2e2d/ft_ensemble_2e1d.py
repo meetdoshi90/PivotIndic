@@ -171,19 +171,16 @@ class GenConfig(GenerationConfig):
 
 
 class DualEncoderDualDecoder(PreTrainedModel):
-    def __init__(self,model_names,alpha=0.5,beta=0.5,PAD_ID=1,config=None,genconfig=None,scaling_lambda=10.0):
+    def __init__(self,model_names,alpha=0.5,beta=0.5,PAD_ID=1,config=None,genconfig=None):
         super(DualEncoderDualDecoder,self).__init__(config=config)
         self.en_indic_model = self.initialize_model(model_names[0], "en-indic", "")
         self.indic_indic_model = self.initialize_model(model_names[1], "indic-indic", "")
-        self.alpha = torch.nn.Parameter(torch.tensor([alpha]), requires_grad=True)
-        self.beta = torch.nn.Parameter(torch.tensor([beta]), requires_grad=True)
-        self.scaling_lambda = scaling_lambda
+        self.alpha = alpha
+        self.beta = beta
         self.PAD_ID = PAD_ID
         self.is_encoder_decoder = True
         self.config = config
         self.generation_config = genconfig
-        
-        #self.lm_head =  torch.nn.Linear(config.n_embed, config.vocab_size) #proxy lm head parameter to make it compatible with hf generate
         
     def get_loss(self,logits,targets):
         #print(logits.shape,targets.shape)
@@ -210,39 +207,9 @@ class DualEncoderDualDecoder(PreTrainedModel):
             encoder_outputs: Optional[Tuple[Tuple[torch.FloatTensor]]] = None,
             **kwargs
         ) -> Union[Tuple[torch.Tensor], Seq2SeqLMOutput]:
-        # print('Use cache', self.en_indic_model.config.use_cache)
-        # print('Use cache', self.indic_indic_model.config.use_cache)
-        # print('Use cache', self.config.use_cache)
         eval = False
         if decoder_input_ids.shape != labels.shape:
             eval = True
-        #print('Forward kwargs','\n'*10,kwargs)
-        # if input_ids is not None:
-        #     print('inp ids', input_ids.shape)
-        # else:
-        #     print('inp ids',input_ids)
-        # if encoder_outputs is not None:
-        #     print('enc out', encoder_outputs.shape)
-        # else:
-        #     print('enc out',encoder_outputs)
-        # if attention_mask is not None:
-        #     print('attn mask', attention_mask.shape)
-        # else:
-        #     print('attn mask', attention_mask)
-        # if decoder_input_ids is None:
-        #     print('dec inp ids None')
-        #     decoder_input_ids = torch.ones((input_ids.shape[0],1)).to(torch.long).to(device=device) * 2
-        # else:
-        #     print('dec inp ids', decoder_input_ids.shape)
-        # if decoder_attention_mask is None:
-        #     print('dec attn mask None')
-        #     decoder_attention_mask = torch.ones_like(decoder_input_ids).to(dtype=attention_mask.dtype).to(device=device)
-        # else:
-        #     print('dec attn mask', decoder_attention_mask.shape)
-        # if labels is None:
-        #     print('labels none')
-        # else:
-        #     print('labels',labels.shape)
         inputs_1 = {
             'input_ids': input_ids[:,:shape1],
             'attention_mask': attention_mask[:,:shape1],
@@ -253,33 +220,44 @@ class DualEncoderDualDecoder(PreTrainedModel):
         }
         inputs_1 = BatchEncoding(inputs_1,tensor_type='pt')
         inputs_2 = BatchEncoding(inputs_2,tensor_type='pt')
-        #print(inputs_1)
-        #print('dec ip',decoder_input_ids)
-        out_1 = self.en_indic_model(**inputs_1, decoder_input_ids=decoder_input_ids, return_dict=True)
-        out_2 = self.indic_indic_model(**inputs_2, decoder_input_ids=decoder_input_ids, return_dict=True)
-        #print('Logits sum')
-        #print(out_1.logits.sum(dim=-1))
-        normalized_out_1 = F.softmax(out_1.logits,dim=-1)
-        normalized_out_2 = F.softmax(out_2.logits,dim=-1)
-        #print(normalized_out_1.sum(dim=-1))
-        #sel_idx = normalized_out_1.argmax(dim=-1)
-        #print(sel_idx)
-        #print(en_indic_tokenizer.batch_decode(sel_idx,src=False))
-        #print('*'*20)
-        out = self.alpha*normalized_out_1 + self.beta*normalized_out_2
-        #print('Check',out==normalized_out_1)
-        # output = {} 
-        #output['logits'] = out 
-        #print(outputs.input_ids[0,:-1],outputs.input_ids[0,1:]) 
+        enc_out_1 = self.en_indic_model.model.encoder(
+            **inputs_1,
+            return_dict=True
+        )
+        enc_out_2 = self.indic_indic_model.model.encoder(
+            **inputs_2,
+            return_dict=True
+        )
+        #print('enc 1 out',enc_out_1.last_hidden_state.shape)
+        #print(inputs_1.input_ids.shape)
+        #print('enc 2 out',enc_out_2.last_hidden_state.shape)
+        #print(inputs_2.input_ids.shape)
+        concatenated_hidden_states = torch.cat([enc_out_1.last_hidden_state,enc_out_2.last_hidden_state],dim=1)
+        #print('concat enc states',concatenated_hidden_states.shape)
+        dec_out = self.indic_indic_model.model.decoder(
+            input_ids=decoder_input_ids,
+            encoder_hidden_states = concatenated_hidden_states,
+            return_dict=True
+        )
+        #print('dec states',dec_out.last_hidden_state.shape)
+        dec_logits = self.indic_indic_model.lm_head(dec_out.last_hidden_state)
+        #print('dec logits',dec_logits.shape)
+        #print(labels.shape if labels is not None else 'No labels')
+
+        #out_1 = self.en_indic_model(**inputs_1, decoder_input_ids=decoder_input_ids, return_dict=True)
+        #out_2 = self.indic_indic_model(**inputs_2, decoder_input_ids=decoder_input_ids, return_dict=True)
+        normalized_out = F.softmax(dec_logits,dim=-1)
+        #normalized_out_1 = F.softmax(out_1.logits,dim=-1)
+        #normalized_out_2 = F.softmax(out_2.logits,dim=-1)
+        #out = self.alpha*normalized_out_1 + self.beta*normalized_out_2
+        #print(normalized_out.shape,labels.shape if labels is not None else 'None')
         if eval == False:
-            constraint_loss = torch.sum((self.alpha + self.beta - 1.0) ** 2)
-            loss = self.get_loss(out,labels) + self.scaling_lambda*constraint_loss
+            loss = self.get_loss(normalized_out,labels) 
         else:
             loss = None
-        #output['loss'] = loss 
         return Seq2SeqLMOutput(
             loss=loss,
-            logits=out,
+            logits=normalized_out,
             past_key_values=None,
             decoder_hidden_states=None,
             decoder_attentions=None,
@@ -303,97 +281,26 @@ class DualEncoderDualDecoder(PreTrainedModel):
             shape1: Optional[int] = None,
             shape2: Optional[int] = None,
             **kwargs,):
-        #print('Alpha',self.alpha.item(),'Beta',self.beta.item())
-        # if past_key_values is not None:
-        #     raise KeyError('past key values not implemented')
-        #print('\n'*10)
-        # print('PREPARE INPUTS CALLED')
-        # if past_key_values is not None:
-        #     print('PAST KV', past_key_values.shape)
-        # if attention_mask is not None:
-        #     print('Attn mask', attention_mask.shape)
-        # if decoder_input_ids is not None:
-        #     print('dec ids', decoder_input_ids.shape)
-        # if head_mask is not None:
-        #     print('head mask', head_mask.shape)
-        # if decoder_head_mask is not None:
-        #     print('dec head mask', decoder_head_mask.shape)
-        # if cross_attn_head_mask is not None:
-        #     print('cross attn head mask', cross_attn_head_mask.shape)
-        # if use_cache is not None:
-        #     print('use cache', use_cache)
-        # if encoder_outputs is not None:
-        #     print('enc outs', encoder_outputs.shape)
-        # for arg in kwargs:
-        #     print(arg, kwargs[arg])
         
         if input_ids.shape[1]>(shape1+shape2):
-            #print('inp ids longer than shape1 + shape2',input_ids.shape)
             decoder_input_ids = torch.ones((input_ids.shape[0],1)).to(torch.long).to(device=device) * 2
             decoder_input_ids = torch.cat((decoder_input_ids,input_ids[:,shape1+shape2:]),dim=1)
             input_ids = input_ids[:,:shape1+shape2]
             attention_mask = attention_mask[:,:shape1+shape2]
 
         if decoder_input_ids is None:
-            #print('prep inps dec inp ids None')
             decoder_input_ids = torch.ones((input_ids.shape[0],1)).to(torch.long).to(device=device) * 2
-        # else:
-        #     print('prep inps dec inp ids', decoder_input_ids.shape)
         if decoder_attention_mask is None:
-            #print('prep inps dec attn mask None')
             decoder_attention_mask = torch.ones_like(decoder_input_ids).to(dtype=attention_mask.dtype).to(device=device)
-        # else:
-        #     print('prep inps dec attn mask', decoder_attention_mask.shape)
-        # if `inputs_embeds` are passed, we only want to use them in the 1st generation step
-        # if inputs_embeds is not None and past_key_values is None:
-        #     model_inputs = {"inputs_embeds": inputs_embeds}
-        # else:
-        # print('ip ids')
-        # print(input_ids)
-        # print(input_ids.shape)
-        # print(decoder_input_ids)
-        # print(encoder_outputs)
-        # print('attention mask')
-        # print(attention_mask)
-        # print(attention_mask.shape)
-        # print(decoder_attention_mask)
-        # print(past_key_values)
-        # print(labels) 
-        # print(shape1)
-        # print(shape2)
-        # print(decoder_input_ids.shape)
-        # print(past_key_values)
-        # print(attention_mask.shape)
-        # print(head_mask)
-        # print(decoder_head_mask)
-        # print(cross_attn_head_mask)
-        # print(use_cache)
-        # print(encoder_outputs)
-        # return {
-        #     "input_ids": None,  # encoder_outputs is defined. input_ids not needed
-        #     "encoder_outputs": encoder_outputs,
-        #     "past_key_values": past_key_values,
-        #     "decoder_input_ids": decoder_input_ids,
-        #     "attention_mask": attention_mask,
-        #     "head_mask": head_mask,
-        #     "decoder_head_mask": decoder_head_mask,
-        #     "cross_attn_head_mask": cross_attn_head_mask,
-        #     "use_cache": use_cache,  # change this to avoid caching (presumably for debugging)
-        # }
         return {
             "input_ids": input_ids,  # encoder_outputs is defined. input_ids not needed
             "encoder_outputs": encoder_outputs,
-            # "past_key_values": past_key_values,
             "decoder_input_ids": decoder_input_ids,
             "attention_mask": attention_mask,
             "decoder_attention_mask": decoder_attention_mask,
             "labels": labels,
             "shape1": shape1,
             "shape2": shape2,
-            # "head_mask": head_mask,
-            # "decoder_head_mask": decoder_head_mask,
-            # "cross_attn_head_mask": cross_attn_head_mask,
-            # "use_cache": False,  # change this to avoid caching (presumably for debugging)
         }
         
     def initialize_model(self,ckpt_dir, direction, quantization, train=True):
@@ -432,8 +339,6 @@ class DualEncoderDualDecoder(PreTrainedModel):
         
         return model
     
-    # @torch.no_grad()
-    # def generate(self,*args,inputs_1,inputs_2,outputs,**kwargs):
         
         
 def read_file_to_list(file_path):
@@ -767,7 +672,7 @@ if __name__ == "__main__":
         #print(preds[0,:])
         decoded_labels = en_indic_tokenizer.batch_decode(labels, src=False)
         decoded_labels = ip.postprocess_batch(decoded_labels, lang=tgt_lang)
-        #print(decoded_preds)
+        print(decoded_preds)
         #print(decoded_labels[0])
         #print(decoded_preds[0])
 

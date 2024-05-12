@@ -1,1 +1,1 @@
-bash run_ft.sh eng_Latn hin_Deva gom_Deva 0.5 0.5
+bash run_ft.sh eng_Latn hin_Deva kas_Arab 0.5 0.5

@@ -26,12 +26,14 @@ from huggingface_hub import PyTorchModelHubMixin
 from IndicTransTokenizer import IndicProcessor, IndicTransTokenizer
 import evaluate
 from tqdm import tqdm
+import pandas as pd
+from preprocess_translate import *
 
 def initialize_tokenizer(direction):
     tokenizer = IndicTransTokenizer(direction=direction)
     return tokenizer
 
-device = "cuda:7" 
+device = "cuda:1" 
 
 src_lang_1 = 'eng_Latn'
 src_lang_2 = 'hin_Deva'
@@ -41,7 +43,7 @@ src1 = f'/raid/nlp/pranavg/Multi-source-pivoting/data/IN22/IN22-Gen/test.{src_la
 src2 = f'/raid/nlp/pranavg/Multi-source-pivoting/data/IN22/IN22-Gen/test.{src_lang_2}'
 tgt = f'/raid/nlp/pranavg/Multi-source-pivoting/data/IN22/IN22-Gen/test.{tgt_lang}'
 
-CHECKPOINT_NAME = '/raid/nlp/pranavg/Multi-source-pivoting/PivotIndic/2e2d/model-en-hi-bo-ts/checkpoint-9000'
+CHECKPOINT_NAME = '/raid/nlp/pranavg/Multi-source-pivoting/PivotIndic/2e2d/model/checkpoint-13000'
 
 class Config(PretrainedConfig):
     def __init__(self,**kwargs):
@@ -50,22 +52,20 @@ class Config(PretrainedConfig):
 #class DualEncoderDualDecoder(torch.nn.Module, PyTorchModelHubMixin):
 class DualEncoderDualDecoder(PreTrainedModel):
     config_class = Config
-    def __init__(self,config=None,model_names=["ai4bharat/indictrans2-en-indic-1B", "ai4bharat/indictrans2-indic-indic-1B"],alpha=1.0,beta=0.0,PAD_ID=1,genconfig=None):
+
+    def __init__(self,config=None,model_names=["ai4bharat/indictrans2-en-indic-1B", "ai4bharat/indictrans2-indic-indic-1B"],alpha=0.5,beta=0.5,PAD_ID=1,genconfig=None,scaling_lambda=10.0):
         super(DualEncoderDualDecoder,self).__init__(config=config)
-        print(config)
         self.en_indic_model = self.initialize_model(model_names[0], "en-indic", "")
         self.indic_indic_model = self.initialize_model(model_names[1], "indic-indic", "")
-        self.alpha = alpha 
-        self.beta = beta
+        self.alpha = torch.nn.Parameter(torch.tensor([alpha]), requires_grad=True)
+        self.bias = torch.nn.Parameter(torch.tensor([beta]), requires_grad=True)
+        self.scaling_lambda = scaling_lambda
         self.PAD_ID = PAD_ID
         self.is_encoder_decoder = True
         self.config = config
         self.generation_config = genconfig
         
-        #self.lm_head =  torch.nn.Linear(config.n_embed, config.vocab_size) #proxy lm head parameter to make it compatible with hf generate
-        
     def get_loss(self,logits,targets):
-        #print(logits.shape,targets.shape)
         B, C, V = logits.shape
         logits = logits.reshape(B*C, V)
         targets = targets.reshape(B*C)
@@ -74,54 +74,23 @@ class DualEncoderDualDecoder(PreTrainedModel):
         assert loss.shape==targets.shape
         loss_mask_1 = targets!=PAD_ID
         loss_masked = loss.where(loss_mask_1, torch.tensor(0.0))
-        #print(loss_masked.sum(),torch.count_nonzero(loss_masked), torch.isnan(loss_masked).sum()/loss_masked.numel())
         return loss_masked.sum()/torch.count_nonzero(loss_masked)
 
     def forward(self,
-            input_ids: torch.LongTensor = None,
-            attention_mask: torch.LongTensor = None,
-            decoder_input_ids: Optional[torch.LongTensor] = None,
-            decoder_attention_mask: Optional[torch.LongTensor] = None,
-            labels: Optional[torch.LongTensor] = None,
-            shape1: Optional[int] = None,
-            shape2: Optional[int] = None,
-            return_dict: Optional[bool] = None,
-            encoder_outputs: Optional[Tuple[Tuple[torch.FloatTensor]]] = None,
-            **kwargs
+                input_ids: torch.LongTensor = None,
+                attention_mask: torch.LongTensor = None,
+                decoder_input_ids: Optional[torch.LongTensor] = None,
+                decoder_attention_mask: Optional[torch.LongTensor] = None,
+                labels: Optional[torch.LongTensor] = None,
+                shape1: Optional[int] = None,
+                shape2: Optional[int] = None,
+                return_dict: Optional[bool] = None,
+                encoder_outputs: Optional[Tuple[Tuple[torch.FloatTensor]]] = None,
+                **kwargs
         ) -> Union[Tuple[torch.Tensor], Seq2SeqLMOutput]:
-        # print('Use cache', self.en_indic_model.config.use_cache)
-        # print('Use cache', self.indic_indic_model.config.use_cache)
-        # print('Use cache', self.config.use_cache)
         eval = False
         if decoder_input_ids.shape != labels.shape:
             eval = True
-        #print('Forward kwargs','\n'*10,kwargs)
-        # if input_ids is not None:
-        #     print('inp ids', input_ids.shape)
-        # else:
-        #     print('inp ids',input_ids)
-        # if encoder_outputs is not None:
-        #     print('enc out', encoder_outputs.shape)
-        # else:
-        #     print('enc out',encoder_outputs)
-        # if attention_mask is not None:
-        #     print('attn mask', attention_mask.shape)
-        # else:
-        #     print('attn mask', attention_mask)
-        # if decoder_input_ids is None:
-        #     print('dec inp ids None')
-        #     decoder_input_ids = torch.ones((input_ids.shape[0],1)).to(torch.long).to(device=device) * 2
-        # else:
-        #     print('dec inp ids', decoder_input_ids.shape)
-        # if decoder_attention_mask is None:
-        #     print('dec attn mask None')
-        #     decoder_attention_mask = torch.ones_like(decoder_input_ids).to(dtype=attention_mask.dtype).to(device=device)
-        # else:
-        #     print('dec attn mask', decoder_attention_mask.shape)
-        # if labels is None:
-        #     print('labels none')
-        # else:
-        #     print('labels',labels.shape)
         inputs_1 = {
             'input_ids': input_ids[:,:shape1],
             'attention_mask': attention_mask[:,:shape1],
@@ -132,26 +101,14 @@ class DualEncoderDualDecoder(PreTrainedModel):
         }
         inputs_1 = BatchEncoding(inputs_1,tensor_type='pt')
         inputs_2 = BatchEncoding(inputs_2,tensor_type='pt')
-        #print(inputs_1)
-        #print('dec ip',decoder_input_ids)
         out_1 = self.en_indic_model(**inputs_1, decoder_input_ids=decoder_input_ids, return_dict=True)
         out_2 = self.indic_indic_model(**inputs_2, decoder_input_ids=decoder_input_ids, return_dict=True)
-        #print('Logits sum')
-        #print(out_1.logits.sum(dim=-1))
         normalized_out_1 = F.softmax(out_1.logits,dim=-1)
         normalized_out_2 = F.softmax(out_2.logits,dim=-1)
-        #print(normalized_out_1.sum(dim=-1))
-        sel_idx = normalized_out_1.argmax(dim=-1)
-        #print(sel_idx)
-        #print(en_indic_tokenizer.batch_decode(sel_idx,src=False))
-        #print('*'*20)
-        out = self.alpha*normalized_out_1 + self.beta*normalized_out_2
-        #print('Check',out==normalized_out_1)
-        # output = {} 
-        #output['logits'] = out 
-        #print(outputs.input_ids[0,:-1],outputs.input_ids[0,1:]) 
+        out = self.alpha*normalized_out_1 + self.bias*normalized_out_2
         if eval == False:
-            loss = self.get_loss(out,labels) 
+            constraint_loss = torch.sum((self.alpha + self.bias - 1.0) ** 2)
+            loss = self.get_loss(out,labels) + self.scaling_lambda*constraint_loss
         else:
             loss = None
         #output['loss'] = loss 
@@ -322,10 +279,14 @@ class GenConfig(GenerationConfig):
 model_names = ["ai4bharat/indictrans2-en-indic-1B", "ai4bharat/indictrans2-indic-indic-1B"]
     
 model = DualEncoderDualDecoder.from_pretrained(CHECKPOINT_NAME).to(device)
+print(model.alpha.item(),model.bias.item(),'alpha beta')
 ip = IndicProcessor(inference=False)
 en_indic_tokenizer = initialize_tokenizer("en-indic")
 indic_indic_tokenizer = initialize_tokenizer("indic-indic")
 metric = evaluate.load('sacrebleu',trust_remote_code=True)
+ 
+print(model.alpha)
+print(model.bias)
 
 
 IN22_src_1 = []
@@ -339,7 +300,7 @@ with open(tgt) as f:
     IN22_tgt = f.readlines()
 
 test_predictions = []
-test_references = [[x.strip()] for x in IN22_tgt]
+test_references = [x.strip() for x in IN22_tgt]
 with torch.inference_mode():
     for test_inputs_1,test_inputs_2,test_tgt in tqdm(zip(IN22_src_1,IN22_src_2,IN22_tgt)):
         test_inputs_1 = [test_inputs_1]
@@ -398,6 +359,17 @@ with torch.inference_mode():
 # print(test_predictions)
 # print(test_references)
 assert len(test_predictions)==len(test_references)
-print(metric.compute(predictions=test_predictions,references=test_references))
+
+
+with open(f'{tgt_lang}-tgt.txt','w') as f:
+    f.writelines([x+'\n' for x in test_references])
+
+with open(f'{tgt_lang}-preds.txt','w') as f:
+    f.writelines([x+'\n' for x in test_predictions])
+
+processed_tgt = caller(test_references,tgt_lang,'false','false')
+processed_preds = caller(test_predictions,tgt_lang,'false','false')
+
+print(metric.compute(predictions=processed_preds,references=processed_tgt,tokenize='none'))
 
 
